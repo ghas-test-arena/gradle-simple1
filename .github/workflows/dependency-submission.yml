@@ -1,0 +1,85 @@
+name: Gradle Dependency Submission
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+  metadata: read
+
+env:
+  JAVA_VERSION: 21
+  JAVA_DISTRIB: temurin
+  SKIP_CACHE: ""
+
+jobs:
+  submit-gradle:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98
+        with:
+          ref: refs/heads/master
+
+      - name: Setup Java
+        uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.JAVA_DISTRIB }}
+          overwrite-settings: false
+
+      - name: Detect Gradle version
+        id: gradle-version
+        run: |
+          version=$(gradle --version | grep -E '^Gradle' | grep -o '[0-9.]\+')
+          echo "::notice::Using Java ${{ env.JAVA_VERSION }} (${{ env.JAVA_DISTRIB }}) with Gradle ${version}"
+          if [ ! -f "gradlew" ]; then
+            echo GRADLE_VERSION=${version} >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check cache setting
+        run: |
+          if [[ -n "${{ env.SKIP_CACHE }}" ]]; then
+            echo "actions/cache disabled via 'GH_DEPENDENCY_SUBMISSION_SKIP_CACHE'"
+          else
+            echo "Caching '~/.gradle'. Set 'GH_DEPENDENCY_SUBMISSION_SKIP_CACHE=true' to skip caching in future."
+          fi
+
+      - name: Cache Gradle dependencies
+        if: env.SKIP_CACHE == ''
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306
+        with:
+          path: ~/.gradle
+          key: ${{ runner.os }}-jdk${{ env.JAVA_VERSION }}-${{ env.JAVA_DISTRIB }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-jdk${{ env.JAVA_VERSION }}-${{ env.JAVA_DISTRIB }}-gradle-
+
+      - name: Validate Gradle project
+        run: |
+          if ./gradlew help; then
+            echo "::debug::Gradle validate repository root is a Gradle project with wrapper."
+            echo "{valid-project}={true}" >> "$GITHUB_OUTPUT"
+          elif gradle help; then
+            echo "::debug::Gradle validate repository root is a Gradle project."
+            echo "{valid-project}={true}" >> "$GITHUB_OUTPUT"
+          else
+            echo "{valid-project}={false}" >> "$GITHUB_OUTPUT"
+            echo "### :warning: Gradle validation failed in repository root" >> $GITHUB_STEP_SUMMARY
+            echo "We were unable to validate a Gradle project in the repository root. If your repository requires additional setup steps, you may need to check in your own workflow." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "For more information on submitting Gradle dependencies from your own workflow, refer to [the submission action](https://github.com/gradle/actions)" >> $GITHUB_STEP_SUMMARY
+            echo "::warning:: Gradle validation failed in the repository root."
+            exit 1
+          fi
+
+      - name: Submit Gradle dependencies
+        uses: actions/gradle-build-tools-actions/dependency-submission@8379f6a1328ee0e06e2bb424dadb7b159856a326
+        with:
+          dependency-graph: generate-submit-and-upload
+        env:
+          GITHUB_DEPENDENCY_GRAPH_REF: refs/heads/master
+          GITHUB_DEPENDENCY_GRAPH_SHA: ${{ github.sha }}
+          GITHUB_DEPENDENCY_GRAPH_DETECTOR_NAME: Automatic Dependency Submission
+          GITHUB_DEPENDENCY_GRAPH_DETECTOR_URL: https://github.com/actions/gradle-dependency-submission-action
+          DEPENDENCY_GRAPH_EXCLUDE_CONFIGURATIONS: "^detachedConfiguration([0-9]+)$"
